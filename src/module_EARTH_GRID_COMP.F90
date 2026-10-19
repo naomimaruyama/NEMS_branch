@@ -2883,6 +2883,32 @@
           return  ! bail out
       endif
 
+      ! neutral He and H: exported by IPE (MSIS values) for the total
+      ! thermospheric mass density at GRACE heights (two-way coupling work)
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "He_Density")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="He_Density", &
+          canonicalUnits="m-3", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "H_Density")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="H_Density", &
+          canonicalUnits="m-3", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
       if (.not.NUOPC_FieldDictionaryHasEntry( &
         "O_plus_density")) then
         call NUOPC_FieldDictionaryAddEntry( &
