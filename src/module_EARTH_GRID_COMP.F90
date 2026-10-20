@@ -2883,6 +2883,56 @@
           return  ! bail out
       endif
 
+      ! two-way coupling diagnostics: the IPE fields as received by WAM on
+      ! its own grid, re-exported by WAM for SWIO (round-trip checks)
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "electron_density_ipe")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="electron_density_ipe", &
+          canonicalUnits="m-3", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "O_plus_density_ipe")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="O_plus_density_ipe", &
+          canonicalUnits="m-3", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "NO_plus_density_ipe")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="NO_plus_density_ipe", &
+          canonicalUnits="m-3", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "O2_plus_density_ipe")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="O2_plus_density_ipe", &
+          canonicalUnits="m-3", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
       ! neutral He and H: exported by IPE (MSIS values) for the total
       ! thermospheric mass density at GRACE heights (two-way coupling work)
       if (.not.NUOPC_FieldDictionaryHasEntry( &

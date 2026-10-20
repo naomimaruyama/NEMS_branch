@@ -272,6 +272,42 @@ module module_MED_SWPC
       file=__FILE__)) &
       return  ! bail out
 
+    ! -- IPE -> WAM feedback fields (two-way coupling, docs/two_way/ICD.md
+    ! -- section 2): imported from IPE on its 3-D mesh, exported to WAM on
+    ! -- its 2-D mesh with an ungridded vertical dimension; StateStoreField
+    ! -- interpolates from the mediator levels to WAM's per-column heights
+    ! -- (remoteLevels, set from the WAM "height" field every step).
+    call NamespaceAdd("IPM",importState, &
+      (/ &
+        "electron_density", &
+        "O_plus_density  ", &
+        "NO_plus_density ", &
+        "O2_plus_density "  &
+      /), &
+      "cannot provide", &
+      fieldSep=":", &
+      rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__, &
+      file=__FILE__)) &
+      return  ! bail out
+
+    call NamespaceAdd("ATM",exportState, &
+      (/ &
+        "electron_density", &
+        "O_plus_density  ", &
+        "NO_plus_density ", &
+        "O2_plus_density "  &
+      /), &
+      "cannot provide", &
+      ungriddedVerticalDim=.true., &
+      fieldSep=":", &
+      rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__, &
+      file=__FILE__)) &
+      return  ! bail out
+
     call NamespaceAdvertise(rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
       line=__LINE__, &
