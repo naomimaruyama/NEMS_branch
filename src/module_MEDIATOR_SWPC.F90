@@ -19,6 +19,10 @@ module module_MED_SWPC
   
   implicit none
 
+  ! -- "no IPE data" marker on the IPE -> WAM fields; must equal
+  ! -- ipe_sentinel in WAM/src/share/module_IPE_to_WAM.F90 (-1.0E30)
+  real(ESMF_KIND_R8), parameter :: ipeSentinel = -1.0e30_ESMF_KIND_R8
+
   private
 
   public :: SetServices
@@ -303,6 +307,16 @@ module module_MED_SWPC
       ungriddedVerticalDim=.true., &
       fieldSep=":", &
       rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__, &
+      file=__FILE__)) &
+      return  ! bail out
+
+    ! -- WAM points with no IPE value (below the 90 km mesh bottom, above
+    ! -- its top, unmapped by the regrid) receive the sentinel of
+    ! -- WAM/src/share/module_IPE_to_WAM.F90 (ipe_sentinel, ICD section 4.3)
+    ! -- instead of 0, so that WAM keeps its empirical ionosphere there.
+    call NamespaceSetFillValue("ATM", exportState, ipeSentinel, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
       line=__LINE__, &
       file=__FILE__)) &

@@ -28,6 +28,12 @@ module module_MED_SWPC_methods
     integer                    :: fieldMaxRank
     integer                    :: fieldNameMaxLength
     logical                    :: doRotation
+    ! -- fill value for destination points with no source data: points the
+    ! -- horizontal regrid leaves unmapped and vertical levels outside the
+    ! -- source range (NamespaceSetFillValue). Off by default: the forward
+    ! -- WAM -> IPE path keeps its zero/constant-extrapolation behaviour.
+    logical                    :: useFill   = .false.
+    real(ESMF_KIND_R8)         :: fillValue = 0._ESMF_KIND_R8
     integer, dimension(:), pointer :: fieldDepMap => null()
     type(stateType),   pointer :: next 
   end type stateType
@@ -43,6 +49,10 @@ module module_MED_SWPC_methods
     type(ESMF_RouteHandle)   :: rh
     type(stateType), pointer :: srcState => null()
     type(stateType), pointer :: dstState => null()
+    ! -- 1 at destination points reached by the regrid, 0 where unmapped
+    ! -- (a field of ones sent through rh once, in RouteHandleCreate)
+    type(ESMF_Field)         :: dstMask
+    logical                  :: maskIsCreated = .false.
     type(rhType),    pointer :: next
   end type rhType
 
@@ -105,6 +115,7 @@ module module_MED_SWPC_methods
     NamespacePrint,                    &
     NamespaceRealizeFields,            &
     NamespaceRemoveField,              &
+    NamespaceSetFillValue,             &
     NamespaceSetLocalGrid,             &
     NamespaceSetLocalGridFromField,    &
     NamespaceSetLocalMesh,             &
@@ -397,6 +408,44 @@ contains
       rcToReturn=rc)) return
 
   end subroutine StateAdd
+
+  subroutine NamespaceSetFillValue(name, state, fillValue, rc)
+    ! -- Mark the namespace (name, state) so that destination points without
+    ! -- source data receive fillValue instead of 0: points unmapped by the
+    ! -- horizontal regrid (FieldRegrid) and vertical levels below the lowest
+    ! -- or above the highest source level (StateStoreField). Used for the
+    ! -- IPE -> WAM fields, docs/two_way/ICD.md section 4.3.
+    character(len=*),   intent(in)  :: name
+    type(ESMF_State),   intent(in)  :: state
+    real(ESMF_KIND_R8), intent(in)  :: fillValue
+    integer, optional,  intent(out) :: rc
+
+    ! -- local variables
+    type(compType),  pointer :: p
+    type(stateType), pointer :: s
+
+    ! -- begin
+    if (present(rc)) rc = ESMF_RC_NOT_FOUND
+
+    p => compList
+    do while (associated(p))
+      if (trim(p % name) == trim(name)) then
+        s => p % stateList
+        do while (associated(s))
+          if (s % parent == state) then
+            s % useFill   = .true.
+            s % fillValue = fillValue
+            if (present(rc)) rc = ESMF_SUCCESS
+          end if
+          s => s % next
+        end do
+      end if
+      p => p % next
+    end do
+
+    nullify(p, s)
+
+  end subroutine NamespaceSetFillValue
 
   subroutine NamespaceRemoveField(name, state, fieldName, rc)
 
@@ -2669,11 +2718,13 @@ contains
 
   ! -- Namespace: Field Retrieve/Store/Interpolate/Release methods: begin definition --
 
-  subroutine VerticalInterpolate1D(srcCoord, srcfarray, dstCoord, dstfarray, auxfarray, options, rc)
+  subroutine VerticalInterpolate1D(srcCoord, srcfarray, dstCoord, dstfarray, auxfarray, options, &
+    fillValue, rc)
     real(ESMF_KIND_R8), dimension(:,:),  intent(in) :: srcfarray, srcCoord, dstCoord
     real(ESMF_KIND_R8), dimension(:,:), intent(out) :: dstfarray
     real(ESMF_KIND_R8), dimension(:,:), optional, intent(in) :: auxfarray
     character(len=*), optional, intent(in) :: options
+    real(ESMF_KIND_R8), optional, intent(in) :: fillValue
     integer, intent(out) :: rc
 
     ! -- local variables
@@ -2737,9 +2788,10 @@ contains
       end if
     else
       ! -- linear interpolation, extrapolate with constant value
+      ! -- (with fillValue: no extrapolation, fill outside the source range)
       do i = lbnd, ubnd
         call PolyInterpolate(srcCoord(i,:), srcfarray(i,:), &
-                             dstCoord(i,:), dstfarray(i,:), 1, rc)
+                             dstCoord(i,:), dstfarray(i,:), 1, rc, fillValue=fillValue)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
           line=__LINE__, &
           file=__FILE__)) &
@@ -2749,11 +2801,13 @@ contains
 
   end subroutine VerticalInterpolate1D
 
-  subroutine VerticalInterpolate2D(srcCoord, srcfarray, dstCoord, dstfarray, auxfarray, options, rc)
+  subroutine VerticalInterpolate2D(srcCoord, srcfarray, dstCoord, dstfarray, auxfarray, options, &
+    fillValue, rc)
     real(ESMF_KIND_R8), dimension(:,:,:),  intent(in) :: srcfarray, srcCoord, dstCoord
     real(ESMF_KIND_R8), dimension(:,:,:), intent(out) :: dstfarray
     real(ESMF_KIND_R8), dimension(:,:,:), optional, intent(in) :: auxfarray
     character(len=*), optional, intent(in) :: options
+    real(ESMF_KIND_R8), optional, intent(in) :: fillValue
     integer, intent(out) :: rc
 
     ! -- local variables
@@ -2823,10 +2877,11 @@ contains
       end if
     else
         ! -- linear interpolation, extrapolate with constant value
+        ! -- (with fillValue: no extrapolation, fill outside the source range)
       do j = lbnd(2), ubnd(2)
         do i = lbnd(1), ubnd(1)
           call PolyInterpolate(srcCoord(i,j,:), srcfarray(i,j,:), &
-                               dstCoord(i,j,:), dstfarray(i,j,:), 1, rc)
+                               dstCoord(i,j,:), dstfarray(i,j,:), 1, rc, fillValue=fillValue)
           if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
             line=__LINE__, &
             file=__FILE__)) &
@@ -2837,11 +2892,16 @@ contains
 
   end subroutine VerticalInterpolate2D
 
-  subroutine PolyInterpolate(xs, ys, xd, yd, m, rc)
+  subroutine PolyInterpolate(xs, ys, xd, yd, m, rc, fillValue)
+    ! -- Without fillValue (original behaviour): below xs(1) the result is 0,
+    ! -- above xs(np) it is ys(np). With fillValue: both ranges and any
+    ! -- interval whose supporting source values carry fillValue (an
+    ! -- unmapped point of the horizontal regrid) receive fillValue.
     real(ESMF_KIND_R8), dimension(:), intent(in)  :: xs, ys, xd
     real(ESMF_KIND_R8), dimension(:), intent(out) :: yd
     integer, intent(in)  :: m
     integer, intent(out) :: rc
+    real(ESMF_KIND_R8), optional, intent(in) :: fillValue
 
     ! -- local variables
     integer :: i, j, k, n, np
@@ -2855,11 +2915,18 @@ contains
     do i = 1, size(xd)
       x = xd(i)
       y = 0._ESMF_KIND_R8
+      if (present(fillValue)) y = fillValue
       call locate(xs, np, x, j)
       if (j == np) then
-        y = ys(np)
+        if (.not.present(fillValue)) y = ys(np)
       else if (j > 0) then
         k = min(max(j-(n-1)/2,1), np+1-n)
+        if (present(fillValue)) then
+          if (any(ys(k:k+n-1) == fillValue)) then
+            yd(i) = fillValue
+            cycle
+          end if
+        end if
         call polint(xs(k:), ys(k:), n, x, y, dy, rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg="Error in polint", &
           line=__LINE__, &
@@ -3179,6 +3246,19 @@ contains
         rcToReturn=rc)) return  ! bail out
     end if
 
+    ! -- unmapped destination points were zeroed by ESMF_REGION_TOTAL;
+    ! -- set them to the fill value where the destination asks for one
+    if (rh % maskIsCreated) then
+      do comp = 1, compCount
+        call FieldApplyMask(dstFieldComp(comp), rh % dstMask, &
+          rh % dstState % fillValue, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+      end do
+    end if
+
     do comp = 1, compCount
       ! -- print diagnostic info
       if (btest(ldiagnostic,17)) then
@@ -3482,11 +3562,20 @@ contains
         fptr2d = reshape(fptr1d, shape(fptr2d))
 
         ! -- interpolate from 2d+1 Mesh to 3d Mesh
-        call FieldInterpolate(state % localIntField(localComp), dstField, &
-          srcLevels=state % localLevels, &
-          dstLevels=state % remoteLevels, &
-          rc=localrc)
-!         auxArray=auxArray, options=options, rc=localrc)
+        if (state % useFill) then
+          ! -- levels outside the source range and levels next to an
+          ! -- unmapped point receive the fill value (IPE -> WAM path)
+          call FieldInterpolate(state % localIntField(localComp), dstField, &
+            srcLevels=state % localLevels, &
+            dstLevels=state % remoteLevels, &
+            fillValue=state % fillValue, rc=localrc)
+        else
+          call FieldInterpolate(state % localIntField(localComp), dstField, &
+            srcLevels=state % localLevels, &
+            dstLevels=state % remoteLevels, &
+            rc=localrc)
+!           auxArray=auxArray, options=options, rc=localrc)
+        end if
         if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
           line=__LINE__,  &
           file=__FILE__,  &
@@ -3497,7 +3586,12 @@ contains
       else if (geomtype == ESMF_GEOMTYPE_GRID) then
 
         ! -- use localLevels only on Mesh to reduce complexity for the time being
-        call FieldInterpolate(field, dstField, dstLevels=state % remoteLevels, rc=localrc)
+        if (state % useFill) then
+          call FieldInterpolate(field, dstField, dstLevels=state % remoteLevels, &
+            fillValue=state % fillValue, rc=localrc)
+        else
+          call FieldInterpolate(field, dstField, dstLevels=state % remoteLevels, rc=localrc)
+        end if
         if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
           line=__LINE__,  &
           file=__FILE__,  &
@@ -3606,13 +3700,15 @@ contains
   end subroutine StateSetLocalVectors
 
 
-  subroutine FieldInterpolate(srcField, dstField, srcLevels, dstLevels, auxArray, options, rc)
+  subroutine FieldInterpolate(srcField, dstField, srcLevels, dstLevels, auxArray, options, &
+    fillValue, rc)
     type(ESMF_Field),            intent(in) :: srcField
     type(ESMF_Field),         intent(inout) :: dstField
     type(ESMF_Array), optional,  intent(in) :: srcLevels
     type(ESMF_Array), optional,  intent(in) :: dstLevels
     type(ESMF_Array), optional,  intent(in) :: auxArray
     character(len=*), optional,  intent(in) :: options
+    real(ESMF_KIND_R8), optional, intent(in) :: fillValue
     integer,          optional, intent(out) :: rc
 
     ! -- local variables
@@ -3855,7 +3951,7 @@ contains
         end if
 
         call Interpolate(srcCoord2d, srcData2d, dstCoord2d, dstData2d, &
-          auxfarray=auxData2d, options=options, rc=localrc)
+          auxfarray=auxData2d, options=options, fillValue=fillValue, rc=localrc)
         if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
           line=__LINE__,  &
           file=__FILE__,  &
@@ -3898,7 +3994,7 @@ contains
         end if
 
         call Interpolate(srcCoord3d, srcData3d, dstCoord3d, dstData3d, &
-          auxfarray=auxData3d, options=options, rc=localrc)
+          auxfarray=auxData3d, options=options, fillValue=fillValue, rc=localrc)
         if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
           line=__LINE__,  &
           file=__FILE__,  &
@@ -4256,6 +4352,14 @@ contains
                     file=__FILE__,  &
                     rcToReturn=rc)) return  ! bail out
 
+                  if (rHandle % dstState % useFill) then
+                    call RouteHandleMaskCreate(rHandle, srcField, dstField, rc=localrc)
+                    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+                      line=__LINE__,  &
+                      file=__FILE__,  &
+                      rcToReturn=rc)) return  ! bail out
+                  end if
+
                   if (associated(rh)) then
                     rh % next => rHandle
                   else
@@ -4277,6 +4381,263 @@ contains
     if (present(routeHandle)) routeHandle => rhList
 
   end subroutine RouteHandleCreate
+
+  subroutine RouteHandleMaskCreate(rh, srcField, dstField, rc)
+    ! -- Send a field of ones through the route handle: destination points
+    ! -- reached by the regrid receive 1 (bilinear weights sum to one),
+    ! -- unmapped points stay 0 (ESMF_REGION_TOTAL). The result is kept in
+    ! -- rh % dstMask and applied after every regrid (FieldRegrid).
+    type(rhType),          intent(inout) :: rh
+    type(ESMF_Field),      intent(in)    :: srcField, dstField
+    integer, optional,     intent(out)   :: rc
+
+    ! -- local variables
+    type(ESMF_Field)           :: onesField
+    integer                    :: localrc
+    integer                    :: nTotal, nUnmapped
+    character(len=ESMF_MAXSTR) :: msgString
+
+    ! -- begin
+    if (present(rc)) rc = ESMF_SUCCESS
+
+    onesField = FieldCreateLike(srcField, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+    call ESMF_FieldFill(onesField, dataFillScheme="const", &
+      const1=1._ESMF_KIND_R8, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+    rh % dstMask = FieldCreateLike(dstField, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+    call ESMF_FieldRegrid(srcField=onesField, dstField=rh % dstMask, &
+      zeroregion=ESMF_REGION_TOTAL, &
+#ifdef BFB_REGRID
+      termorderflag=ESMF_TERMORDER_SRCSEQ, &
+#endif
+      routehandle=rh % rh, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+    call ESMF_FieldDestroy(onesField, noGarbage=.true., rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+    rh % maskIsCreated = .true.
+
+    call FieldCountBelow(rh % dstMask, 0.5_ESMF_KIND_R8, nUnmapped, nTotal, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+    write(msgString,'("MED: ",a,": ",i0," of ",i0," local destination points unmapped",'// &
+      '" by the regrid; they receive the fill value ",g12.4)') &
+      trim(rh % label), nUnmapped, nTotal, rh % dstState % fillValue
+    call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+  end subroutine RouteHandleMaskCreate
+
+  function FieldCreateLike(field, rc)
+    ! -- new R8 field on the same Mesh (node location) or Grid (center
+    ! -- stagger) as field; no ungridded dimensions
+    type(ESMF_Field),  intent(in)  :: field
+    integer, optional, intent(out) :: rc
+    type(ESMF_Field)               :: FieldCreateLike
+
+    ! -- local variables
+    integer                  :: localrc
+    type(ESMF_GeomType_Flag) :: geomtype
+    type(ESMF_Mesh)          :: mesh
+    type(ESMF_Grid)          :: grid
+    type(ESMF_MeshLoc)       :: meshloc
+    type(ESMF_StaggerLoc)    :: staggerloc
+
+    ! -- begin
+    if (present(rc)) rc = ESMF_SUCCESS
+
+    call ESMF_FieldGet(field, geomtype=geomtype, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+    if (geomtype == ESMF_GEOMTYPE_MESH) then
+      call ESMF_FieldGet(field, mesh=mesh, meshloc=meshloc, rc=localrc)
+      if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__,  &
+        file=__FILE__,  &
+        rcToReturn=rc)) return  ! bail out
+      FieldCreateLike = ESMF_FieldCreate(mesh, ESMF_TYPEKIND_R8, &
+        meshloc=meshloc, rc=localrc)
+    else if (geomtype == ESMF_GEOMTYPE_GRID) then
+      call ESMF_FieldGet(field, grid=grid, staggerloc=staggerloc, rc=localrc)
+      if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__,  &
+        file=__FILE__,  &
+        rcToReturn=rc)) return  ! bail out
+      FieldCreateLike = ESMF_FieldCreate(grid, ESMF_TYPEKIND_R8, &
+        staggerloc=staggerloc, rc=localrc)
+    else
+      call ESMF_LogSetError(ESMF_RC_NOT_IMPL, &
+        msg="FieldCreateLike: field must be on a Mesh or a Grid", &
+        line=__LINE__, &
+        file=__FILE__, &
+        rcToReturn=rc)
+      return ! bail out
+    end if
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+  end function FieldCreateLike
+
+  subroutine FieldApplyMask(field, mask, fillValue, rc)
+    ! -- field = fillValue where mask < 0.5 (same geometry and rank)
+    type(ESMF_Field),   intent(inout) :: field
+    type(ESMF_Field),   intent(in)    :: mask
+    real(ESMF_KIND_R8), intent(in)    :: fillValue
+    integer, optional,  intent(out)   :: rc
+
+    ! -- local variables
+    integer :: localrc, rank, localDe, localDeCount
+    real(ESMF_KIND_R8), pointer :: f1(:), f2(:,:), f3(:,:,:)
+    real(ESMF_KIND_R8), pointer :: m1(:), m2(:,:), m3(:,:,:)
+
+    ! -- begin
+    if (present(rc)) rc = ESMF_SUCCESS
+
+    call ESMF_FieldGet(field, rank=rank, localDeCount=localDeCount, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+    do localDe = 0, localDeCount - 1
+      select case (rank)
+      case (1)
+        call ESMF_FieldGet(field, localDe=localDe, farrayPtr=f1, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        call ESMF_FieldGet(mask, localDe=localDe, farrayPtr=m1, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        where (m1 < 0.5_ESMF_KIND_R8) f1 = fillValue
+      case (2)
+        call ESMF_FieldGet(field, localDe=localDe, farrayPtr=f2, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        call ESMF_FieldGet(mask, localDe=localDe, farrayPtr=m2, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        where (m2 < 0.5_ESMF_KIND_R8) f2 = fillValue
+      case (3)
+        call ESMF_FieldGet(field, localDe=localDe, farrayPtr=f3, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        call ESMF_FieldGet(mask, localDe=localDe, farrayPtr=m3, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        where (m3 < 0.5_ESMF_KIND_R8) f3 = fillValue
+      case default
+        call ESMF_LogSetError(ESMF_RC_NOT_IMPL, &
+          msg="FieldApplyMask: rank must be 1, 2 or 3", &
+          line=__LINE__, &
+          file=__FILE__, &
+          rcToReturn=rc)
+        return ! bail out
+      end select
+    end do
+
+  end subroutine FieldApplyMask
+
+  subroutine FieldCountBelow(field, threshold, nBelow, nTotal, rc)
+    ! -- number of local points with value < threshold, and total
+    type(ESMF_Field),   intent(in)  :: field
+    real(ESMF_KIND_R8), intent(in)  :: threshold
+    integer,            intent(out) :: nBelow, nTotal
+    integer, optional,  intent(out) :: rc
+
+    ! -- local variables
+    integer :: localrc, rank, localDe, localDeCount
+    real(ESMF_KIND_R8), pointer :: f1(:), f2(:,:), f3(:,:,:)
+
+    ! -- begin
+    if (present(rc)) rc = ESMF_SUCCESS
+    nBelow = 0
+    nTotal = 0
+
+    call ESMF_FieldGet(field, rank=rank, localDeCount=localDeCount, rc=localrc)
+    if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__,  &
+      file=__FILE__,  &
+      rcToReturn=rc)) return  ! bail out
+
+    do localDe = 0, localDeCount - 1
+      select case (rank)
+      case (1)
+        call ESMF_FieldGet(field, localDe=localDe, farrayPtr=f1, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        nBelow = nBelow + count(f1 < threshold)
+        nTotal = nTotal + size(f1)
+      case (2)
+        call ESMF_FieldGet(field, localDe=localDe, farrayPtr=f2, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        nBelow = nBelow + count(f2 < threshold)
+        nTotal = nTotal + size(f2)
+      case (3)
+        call ESMF_FieldGet(field, localDe=localDe, farrayPtr=f3, rc=localrc)
+        if (ESMF_LogFoundError(rcToCheck=localrc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__,  &
+          file=__FILE__,  &
+          rcToReturn=rc)) return  ! bail out
+        nBelow = nBelow + count(f3 < threshold)
+        nTotal = nTotal + size(f3)
+      case default
+        call ESMF_LogSetError(ESMF_RC_NOT_IMPL, &
+          msg="FieldCountBelow: rank must be 1, 2 or 3", &
+          line=__LINE__, &
+          file=__FILE__, &
+          rcToReturn=rc)
+        return ! bail out
+      end select
+    end do
+
+  end subroutine FieldCountBelow
 
   subroutine RouteHandlePrint(routeHandleList, detailed, rc)
     type(rhType), optional, pointer     :: routeHandleList
