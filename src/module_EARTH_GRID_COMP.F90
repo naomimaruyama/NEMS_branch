@@ -2933,6 +2933,81 @@
           return  ! bail out
       endif
 
+      ! two-way coupling diagnostics of WAM's ion drag block (ICD section 6):
+      ! empirical Ne, Pedersen conductivities from the empirical and the IPE
+      ! Ne, and the applied ion drag tendencies and Joule heating rate
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "electron_density_empirical")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="electron_density_empirical", &
+          canonicalUnits="m-3", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "pedersen_conductivity_empirical")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="pedersen_conductivity_empirical", &
+          canonicalUnits="S m-1", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "pedersen_conductivity_ipe")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="pedersen_conductivity_ipe", &
+          canonicalUnits="S m-1", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "ion_drag_tendency_eastward")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="ion_drag_tendency_eastward", &
+          canonicalUnits="m s-2", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "ion_drag_tendency_northward")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="ion_drag_tendency_northward", &
+          canonicalUnits="m s-2", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
+      if (.not.NUOPC_FieldDictionaryHasEntry( &
+        "joule_heating_applied")) then
+        call NUOPC_FieldDictionaryAddEntry( &
+          standardName="joule_heating_applied", &
+          canonicalUnits="J kg-1 s-1", &
+          rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      endif
+
       ! neutral He and H: exported by IPE (MSIS values) for the total
       ! thermospheric mass density at GRACE heights (two-way coupling work)
       if (.not.NUOPC_FieldDictionaryHasEntry( &
